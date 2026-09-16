@@ -2,9 +2,9 @@ name: Android CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "master" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "master" ]
   workflow_dispatch: {}
 
 permissions:
@@ -39,11 +39,11 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
 
       - name: Build release APK
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/master'
         run: gradle assembleRelease --stacktrace
 
       - name: Publish GitHub Release with APK
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.1.${{ github.run_number }}
