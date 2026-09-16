@@ -45,7 +45,7 @@ object AxmlStringPoolPatcher {
     private const val CHUNK_START_ELEMENT = 0x0102
     private const val UTF8_FLAG = 1 shl 8
 
-    private const val ATTR_AUTHORITIES_RESID = 0x01010026 // android:authorities
+    private const val ATTR_AUTHORITIES_RESID = 0x01010018 // android:authorities
     private const val ATTR_NAME_RESID = 0x01010003 // android:name
     private const val TYPE_STRING = 0x03 // Res_value.dataType for a string reference
 
