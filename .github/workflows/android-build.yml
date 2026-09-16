@@ -24,8 +24,6 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # No Gradle wrapper is committed to this repo, so we ask the action to install
-      # a matching Gradle distribution directly and put it on PATH.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -40,13 +38,12 @@ jobs:
           name: apk-cloner-debug
           path: app/build/outputs/apk/debug/*.apk
 
-      # Release APK + GitHub Release only on push to main (not on PRs).
       - name: Build release APK
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         run: gradle assembleRelease --stacktrace
 
       - name: Publish GitHub Release with APK
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.1.${{ github.run_number }}
