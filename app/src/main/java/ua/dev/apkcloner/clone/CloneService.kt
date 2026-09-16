@@ -14,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import ua.dev.apkcloner.R
 import ua.dev.apkcloner.install.ApkInstaller
+import ua.dev.apkcloner.util.Logger
 import java.io.File
 
 class CloneService : Service() {
@@ -54,25 +55,31 @@ class CloneService : Service() {
         }
 
         startForeground(NOTIFICATION_ID, buildNotification("Готуємо $label…"))
+        Logger.log("CloneService", "Start: label=$label oldPackage=$oldPackage newPackage=$newPackage sourcePath=$sourcePath")
 
         scope.launch {
             try {
                 updateNotification("Патчимо AndroidManifest.xml…")
                 val sourceApk = File(sourcePath)
+                Logger.log("CloneService", "Source APK size=${sourceApk.length()} bytes")
                 val workDir = File(cacheDir, "clone_work").apply { mkdirs() }
                 val unsignedApk = File(workDir, "unsigned_${System.currentTimeMillis()}.apk")
                 val signedApk = File(workDir, "signed_${System.currentTimeMillis()}.apk")
 
                 CloneEngine.createClone(sourceApk, unsignedApk, oldPackage, newPackage)
+                Logger.log("CloneService", "Manifest patched + repackaged, unsigned size=${unsignedApk.length()}")
 
                 updateNotification("Підписуємо APK…")
                 ApkSignerHelper.signApk(unsignedApk, signedApk, minSdk = 26)
+                Logger.log("CloneService", "Signed OK, size=${signedApk.length()}")
                 unsignedApk.delete()
 
                 updateNotification("Встановлюємо $label…")
                 broadcast(ACTION_DONE) { putExtra(EXTRA_RESULT_APK_PATH, signedApk.absolutePath) }
+                Logger.log("CloneService", "Starting PackageInstaller session…")
                 ApkInstaller.install(applicationContext, signedApk)
             } catch (t: Throwable) {
+                Logger.logException("CloneService", t)
                 broadcast(ACTION_ERROR) { putExtra(EXTRA_MESSAGE, t.message ?: t.toString()) }
             } finally {
                 stopForeground(STOP_FOREGROUND_REMOVE)

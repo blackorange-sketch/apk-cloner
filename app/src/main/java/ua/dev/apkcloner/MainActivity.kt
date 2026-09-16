@@ -1,6 +1,8 @@
 package ua.dev.apkcloner
 
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -10,6 +12,8 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.EditText
+import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -19,6 +23,7 @@ import ua.dev.apkcloner.clone.CloneService
 import ua.dev.apkcloner.databinding.ActivityMainBinding
 import ua.dev.apkcloner.model.InstalledAppInfo
 import ua.dev.apkcloner.ui.AppListAdapter
+import ua.dev.apkcloner.util.Logger
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
@@ -56,6 +61,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnPickFile.setOnClickListener {
             pickApkLauncher.launch(arrayOf("application/vnd.android.package-archive"))
         }
+        binding.btnViewLog.setOnClickListener { showLogDialog() }
         ensureInstallPermission()
         loadInstalledApps()
     }
@@ -180,6 +186,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun suggestCloneSuffix(pkg: String): String = "$pkg.clone1"
+
+    private fun showLogDialog() {
+        val logText = Logger.readAll().ifBlank { "Лог порожній" }
+        val textView = TextView(this).apply {
+            text = logText
+            setTextIsSelectable(true)
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 11f
+            setPadding(32, 24, 32, 24)
+        }
+        val scrollView = ScrollView(this).apply { addView(textView) }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Лог")
+            .setView(scrollView)
+            .setPositiveButton("Копіювати") { _, _ ->
+                val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("apkcloner_log", logText))
+                Toast.makeText(this, "Скопійовано в буфер обміну", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Закрити", null)
+            .setNeutralButton("Очистити") { _, _ -> Logger.clear() }
+            .show()
+    }
 
     private fun startClone(sourceApkPath: String, oldPackage: String, newPackage: String, label: String) {
         val intent = Intent(this, CloneService::class.java).apply {
