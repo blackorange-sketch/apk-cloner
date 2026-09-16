@@ -54,9 +54,13 @@ object AxmlStringPoolPatcher {
     fun patchPackageName(manifestBytes: ByteArray, oldPackage: String, newPackage: String): ByteArray {
         val buf = ByteBuffer.wrap(manifestBytes).order(ByteOrder.LITTLE_ENDIAN)
 
-        // Top-level chunk: ResXMLTree_header (type 0x0003), 8-byte ResChunk_header
+        // Top-level chunk: for AndroidManifest.xml this is ResXMLTree_header (0x0003); for
+        // resources.arsc it's ResTable_header (0x0002). Both are followed immediately by a
+        // String Pool chunk, which is the only thing the rest of this function relies on.
         val topType = buf.getShort(0).toInt() and 0xFFFF
-        require(topType == 0x0003) { "Not a compiled binary XML (unexpected root chunk type $topType)" }
+        require(topType == 0x0003 || topType == 0x0002) {
+            "Not a compiled binary resource chunk (unexpected root chunk type $topType)"
+        }
         val topHeaderSize = buf.getShort(2).toInt() and 0xFFFF
 
         // The string pool chunk always immediately follows the top-level header.
