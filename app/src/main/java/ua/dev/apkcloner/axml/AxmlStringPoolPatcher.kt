@@ -1,5 +1,6 @@
 package ua.dev.apkcloner.axml
 
+import ua.dev.apkcloner.util.Logger
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -109,10 +110,22 @@ object AxmlStringPoolPatcher {
             val absOffset = dataBase + offsets[i]
             strings.add(if (isUtf8) readUtf8String(buf, absOffset) else readUtf16String(buf, absOffset))
         }
+        val diagnosticIndices = strings.indices.filter {
+            val s = strings[it]
+            s.contains("startup", ignoreCase = true) || s.contains("fileprovider", ignoreCase = true)
+        }
+        Logger.log(
+            "AxmlPatcher",
+            "before: renamePrefixed=$renamePrefixedStrings matches=${diagnosticIndices.map { it to strings[it] }}"
+        )
 
         // ---- Pass 2 prep: find every string-pool index that needs a uniquifying suffix
         // (android:authorities values, and <permission> android:name declarations) ----
         val authorityIndices = findAuthorityStringIndices(buf, manifestBytes.size, poolStart, poolChunkSize, stringCount, strings)
+        Logger.log(
+            "AxmlPatcher",
+            "authorityIndices found=${authorityIndices.size} values=${authorityIndices.map { strings.getOrNull(it) }}"
+        )
         val authoritySuffix = ".c" + Random.nextInt(0x1000, 0xFFFF).toString(16)
 
         var changed = false
@@ -143,6 +156,10 @@ object AxmlStringPoolPatcher {
             }
             strings[i] = s
         }
+        Logger.log(
+            "AxmlPatcher",
+            "after: matches=${diagnosticIndices.map { it to strings[it] }}"
+        )
         if (!changed) return manifestBytes
 
         // ---- Rebuild the string pool chunk from scratch ----
