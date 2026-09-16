@@ -15,14 +15,29 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        // Committed to the repo (debug.keystore) so EVERY build — local or on a fresh
+        // GitHub Actions runner — signs with the exact same certificate. Without this,
+        // each CI run would generate its own random debug key (since there's no persisted
+        // ~/.android/debug.keystore on a fresh VM), and Android refuses to install a new
+        // APK "over" an old one when the signing certificate differs — forcing an
+        // uninstall before every single update.
+        create("cloner") {
+            storeFile = rootProject.file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("cloner")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signed with the auto-generated debug keystore so CI can produce an
-            // installable APK with zero secrets/config. Fine for personal sideloading;
-            // swap in a real signingConfig here if you ever need a Play-Store-grade key.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("cloner")
         }
     }
 
