@@ -25,11 +25,13 @@ import kotlin.random.Random
  *    never patches; renaming the manifest reference without renaming the actual class would
  *    make Android look for a class that no longer exists, crashing the clone at launch.
  *
- * 2. Authority uniquification: <provider android:authorities="..."> values are resolved
- *    precisely (not guessed from text) via the Resource Map chunk (attribute resource id
- *    0x01010026) and every one of them gets a random per-clone suffix appended — this is what
- *    actually prevents INSTALL_FAILED_CONFLICTING_PROVIDER, and works whether the authority text
- *    happens to be package-prefixed or a completely unrelated fixed string from some library.
+ * 2. Uniquification: <provider android:authorities="..."> values AND <permission
+ *    android:name="..."> declarations are resolved precisely (not guessed from text) via the
+ *    Resource Map chunk (attribute resource ids 0x01010026 and 0x01010003, the latter scoped to
+ *    only the <permission> element) and each gets a random per-clone suffix appended. This is
+ *    what actually prevents INSTALL_FAILED_CONFLICTING_PROVIDER and
+ *    INSTALL_FAILED_DUPLICATE_PERMISSION, and works regardless of whether the value happens to be
+ *    package-prefixed or a completely unrelated fixed string from some library.
  *
  * Binary format reference: frameworks/base ResourceTypes.h/.cpp (ResStringPool_header,
  * ResChunk_header, ResXMLTree_node, ResXMLTree_attrExt, ResXMLTree_attribute, Res_value).
@@ -43,6 +45,7 @@ object AxmlStringPoolPatcher {
     private const val UTF8_FLAG = 1 shl 8
 
     private const val ATTR_AUTHORITIES_RESID = 0x01010026 // android:authorities
+    private const val ATTR_NAME_RESID = 0x01010003 // android:name
     private const val TYPE_STRING = 0x03 // Res_value.dataType for a string reference
 
     /**
@@ -95,8 +98,9 @@ object AxmlStringPoolPatcher {
             strings.add(if (isUtf8) readUtf8String(buf, absOffset) else readUtf16String(buf, absOffset))
         }
 
-        // ---- Pass 2 prep: find every string-pool index used as an android:authorities value ----
-        val authorityIndices = findAuthorityStringIndices(buf, manifestBytes.size, poolStart, poolChunkSize, stringCount)
+        // ---- Pass 2 prep: find every string-pool index that needs a uniquifying suffix
+        // (android:authorities values, and <permission> android:name declarations) ----
+        val authorityIndices = findAuthorityStringIndices(buf, manifestBytes.size, poolStart, poolChunkSize, stringCount, strings)
         val authoritySuffix = ".c" + Random.nextInt(0x1000, 0xFFFF).toString(16)
 
         var changed = false
@@ -172,15 +176,19 @@ object AxmlStringPoolPatcher {
 
     /**
      * Walks the Resource Map + XML node section (both untouched by the rename pass, since that
-     * only rewrites string *bytes*, never indices) to find every string-pool index that is used
-     * as the value of an android:authorities attribute anywhere in the document.
+     * only rewrites string *bytes*, never indices) to find every string-pool index that needs a
+     * uniquifying suffix: android:authorities values (any element), and android:name values that
+     * belong specifically to a top-level <permission> declaration (NOT any other element — most
+     * elements use android:name too, e.g. activities/services/providers, and those must be left
+     * alone since they're .dex class references).
      */
     private fun findAuthorityStringIndices(
         buf: ByteBuffer,
         totalSize: Int,
         poolStart: Int,
         poolChunkSize: Int,
-        stringCount: Int
+        stringCount: Int,
+        strings: List<String>
     ): Set<Int> {
         var pos = poolStart + poolChunkSize
         if (pos >= totalSize) return emptySet()
@@ -188,20 +196,19 @@ object AxmlStringPoolPatcher {
         // Optional Resource Map chunk: maps string-pool index -> Android resource id, one
         // int per string, covering the first N (attribute-name) strings in the pool.
         var authoritiesNameIndex = -1
+        var androidNameIndex = -1
         val chunkType = buf.getShort(pos).toInt() and 0xFFFF
         if (chunkType == CHUNK_RESOURCE_MAP) {
             val chunkSize = buf.getInt(pos + 4)
             val idCount = (chunkSize - 8) / 4
             for (i in 0 until minOf(idCount, stringCount)) {
                 val resId = buf.getInt(pos + 8 + i * 4)
-                if (resId == ATTR_AUTHORITIES_RESID) {
-                    authoritiesNameIndex = i
-                    break
-                }
+                if (resId == ATTR_AUTHORITIES_RESID) authoritiesNameIndex = i
+                if (resId == ATTR_NAME_RESID) androidNameIndex = i
             }
             pos += chunkSize
         }
-        if (authoritiesNameIndex < 0) return emptySet() // no provider-authorities attribute used at all
+        if (authoritiesNameIndex < 0 && androidNameIndex < 0) return emptySet()
 
         val result = HashSet<Int>()
         while (pos < totalSize) {
@@ -214,6 +221,8 @@ object AxmlStringPoolPatcher {
                 // ResXMLTree_node common header is headerSize bytes (line number + comment),
                 // immediately followed by ResXMLTree_attrExt.
                 val attrExtStart = pos + headerSize
+                val elementNameIndex = buf.getInt(attrExtStart + 4)
+                val elementName = strings.getOrNull(elementNameIndex)
                 val attributeStart = buf.getShort(attrExtStart + 8).toInt() and 0xFFFF
                 val attributeSize = buf.getShort(attrExtStart + 10).toInt() and 0xFFFF
                 val attributeCount = buf.getShort(attrExtStart + 12).toInt() and 0xFFFF
@@ -222,7 +231,15 @@ object AxmlStringPoolPatcher {
                 for (a in 0 until attributeCount) {
                     val attrOffset = firstAttr + a * attributeSize
                     val nameIndex = buf.getInt(attrOffset + 4)
-                    if (nameIndex != authoritiesNameIndex) continue
+
+                    val isAuthorities = nameIndex == authoritiesNameIndex
+                    // Only treat android:name as something to uniquify when it's the name of a
+                    // <permission> DEFINITION — a custom permission can only be declared by one
+                    // package on the device (INSTALL_FAILED_DUPLICATE_PERMISSION otherwise).
+                    // <uses-permission>, activities, services, providers etc. all reuse the same
+                    // android:name attribute id but must NOT be touched.
+                    val isPermissionDefName = nameIndex == androidNameIndex && elementName == "permission"
+                    if (!isAuthorities && !isPermissionDefName) continue
 
                     val rawValueIndex = buf.getInt(attrOffset + 8)
                     if (rawValueIndex >= 0) result.add(rawValueIndex)
