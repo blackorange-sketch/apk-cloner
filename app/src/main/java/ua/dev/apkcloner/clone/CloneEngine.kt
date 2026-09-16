@@ -10,8 +10,8 @@ import java.util.zip.ZipOutputStream
 
 /**
  * Rewrites a source APK into a "clone" APK with a different applicationId, without decompiling
- * dex/resources. Only binary string pools are touched (package name, ContentProvider
- * authorities, permission strings that share the package prefix) — in TWO places:
+ * dex/resources. Only binary string pools are touched — the manifest's own `package` attribute
+ * (renamed exactly) and every `android:authorities` value (uniquified) — in TWO places:
  *
  * 1. AndroidManifest.xml — covers the common case where authorities/permissions are literal
  *    text in the manifest itself (e.g. "${applicationId}.fileprovider" resolved at build time).

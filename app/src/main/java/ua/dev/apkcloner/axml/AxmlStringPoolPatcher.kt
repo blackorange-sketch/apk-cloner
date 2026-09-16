@@ -18,18 +18,18 @@ import kotlin.random.Random
  *
  * Two independent passes run over that pool:
  *
- * 1. Package-name rewrite: any string equal to, or starting with, "<oldPackage>." / "<oldPackage>$"
- *    gets that prefix replaced with the new package name. Covers fully-qualified class names,
- *    permission strings, and any provider authority that happens to be package-name-based
- *    (the common case, e.g. "${applicationId}.fileprovider").
+ * 1. Package-name rewrite: ONLY the string that is EXACTLY equal to the old package name (the
+ *    manifest's own package="..." attribute) is renamed. Strings that merely start with the
+ *    package name are deliberately left untouched — those are almost always fully-qualified
+ *    class-name references into the .dex (e.g. "oldPackage.MainActivity"), which this tool
+ *    never patches; renaming the manifest reference without renaming the actual class would
+ *    make Android look for a class that no longer exists, crashing the clone at launch.
  *
- * 2. Authority uniquification: some libraries (AndroidX Startup initializers, various SDKs) declare
- *    a <provider android:authorities="..."> value that is NOT derived from the package name at all,
- *    so pass 1 never touches it — yet it still collides with the original app's already-installed
- *    provider (INSTALL_FAILED_CONFLICTING_PROVIDER). To catch these too, we resolve the real
- *    android:authorities attribute (resource id 0x01010026) via the Resource Map chunk, walk every
- *    element's attributes to find values using that attribute, and append a random per-clone
- *    suffix to ALL of them — regardless of whether pass 1 already changed them.
+ * 2. Authority uniquification: <provider android:authorities="..."> values are resolved
+ *    precisely (not guessed from text) via the Resource Map chunk (attribute resource id
+ *    0x01010026) and every one of them gets a random per-clone suffix appended — this is what
+ *    actually prevents INSTALL_FAILED_CONFLICTING_PROVIDER, and works whether the authority text
+ *    happens to be package-prefixed or a completely unrelated fixed string from some library.
  *
  * Binary format reference: frameworks/base ResourceTypes.h/.cpp (ResStringPool_header,
  * ResChunk_header, ResXMLTree_node, ResXMLTree_attrExt, ResXMLTree_attribute, Res_value).
@@ -100,18 +100,18 @@ object AxmlStringPoolPatcher {
         val authoritySuffix = ".c" + Random.nextInt(0x1000, 0xFFFF).toString(16)
 
         var changed = false
-        val oldDot = "$oldPackage."
-        val oldDollar = "$oldPackage$"
         for (i in strings.indices) {
             var s = strings[i]
-            val renamed = when {
-                s == oldPackage -> newPackage
-                s.startsWith(oldDot) -> newPackage + "." + s.substring(oldDot.length)
-                s.startsWith(oldDollar) -> newPackage + "$" + s.substring(oldDollar.length)
-                else -> null
-            }
-            if (renamed != null) {
-                s = renamed
+            // IMPORTANT: only rename the string that is EXACTLY the package name (the
+            // manifest's own package="..." attribute). Do NOT rewrite anything with the
+            // package name as a PREFIX (e.g. "oldPackage.MainActivity") — those are fully
+            // qualified class-name references into the .dex, which this tool never touches.
+            // Renaming the manifest reference without renaming the actual class would make
+            // Android look for a class that no longer exists there -> ClassNotFoundException
+            // crash at launch. Authorities are handled separately below (Pass 2), by resolving
+            // the actual android:authorities attribute rather than guessing from text.
+            if (s == oldPackage) {
+                s = newPackage
                 changed = true
             }
             if (i in authorityIndices) {
