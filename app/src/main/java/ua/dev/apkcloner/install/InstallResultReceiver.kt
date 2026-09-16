@@ -13,15 +13,14 @@ class InstallResultReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+        // EXTRA_STATUS_MESSAGE is the most useful field here: for session-based installs the
+        // system embeds the underlying reason in this text (e.g. "...INSTALL_FAILED_CONFLICTING_PROVIDER...").
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
-        // The numeric legacy PackageManager error code (e.g. -7 = INSTALL_FAILED_CONFLICTING_PROVIDER)
-        // is far more precise than the human-readable message alone.
-        val legacyStatus = intent.getIntExtra(PackageInstaller.EXTRA_LEGACY_STATUS, Int.MIN_VALUE)
         val otherPackage = intent.getStringExtra(PackageInstaller.EXTRA_OTHER_PACKAGE_NAME)
 
         Logger.log(
             "Install",
-            "status=$status legacyStatus=$legacyStatus otherPackage=$otherPackage message=$message"
+            "status=${statusName(status)}($status) otherPackage=$otherPackage message=$message"
         )
 
         when (status) {
@@ -45,12 +44,24 @@ class InstallResultReceiver : BroadcastReceiver() {
                     Toast.LENGTH_LONG
                 ).show()
                 val errorIntent = Intent(CloneService.ACTION_ERROR).apply {
-                    putExtra(CloneService.EXTRA_MESSAGE, "Install failed (legacy=$legacyStatus): $message")
+                    putExtra(CloneService.EXTRA_MESSAGE, "Install failed (${statusName(status)}): $message")
                     setPackage(context.packageName)
                 }
                 context.sendBroadcast(errorIntent)
             }
         }
     }
-}
 
+    private fun statusName(status: Int): String = when (status) {
+        PackageInstaller.STATUS_PENDING_USER_ACTION -> "PENDING_USER_ACTION"
+        PackageInstaller.STATUS_SUCCESS -> "SUCCESS"
+        PackageInstaller.STATUS_FAILURE -> "FAILURE"
+        PackageInstaller.STATUS_FAILURE_ABORTED -> "FAILURE_ABORTED"
+        PackageInstaller.STATUS_FAILURE_BLOCKED -> "FAILURE_BLOCKED"
+        PackageInstaller.STATUS_FAILURE_CONFLICT -> "FAILURE_CONFLICT"
+        PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "FAILURE_INCOMPATIBLE"
+        PackageInstaller.STATUS_FAILURE_INVALID -> "FAILURE_INVALID"
+        PackageInstaller.STATUS_FAILURE_STORAGE -> "FAILURE_STORAGE"
+        else -> "UNKNOWN"
+    }
+}
