@@ -3,6 +3,7 @@ package ua.dev.apkcloner.axml
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.random.Random
 
 /**
  * Patches package-name-derived strings directly inside a *compiled* (binary) AndroidManifest.xml,
@@ -13,30 +14,42 @@ import java.nio.ByteOrder
  * A compiled Android binary XML file (AXML) stores every string used anywhere in the document
  * (element names, attribute names, attribute values, namespace URIs...) once, in a single global
  * "String Pool" chunk near the start of the file. Every element/attribute then just references a
- * string by its index into that pool. That means we do NOT need to walk the XML tree at all:
- * we only need to rewrite the string pool itself.
+ * string by its index into that pool.
  *
- * We find every string that is exactly the old package name, or starts with
- * "<oldPackage>." / "<oldPackage>$" (covers fully-qualified activity/service/provider class
- * names, permission strings like "<pkg>.permission.C2D_MESSAGE", and content provider
- * authorities like "<pkg>.provider"), and rewrite that prefix to the new package name.
+ * Two independent passes run over that pool:
+ *
+ * 1. Package-name rewrite: any string equal to, or starting with, "<oldPackage>." / "<oldPackage>$"
+ *    gets that prefix replaced with the new package name. Covers fully-qualified class names,
+ *    permission strings, and any provider authority that happens to be package-name-based
+ *    (the common case, e.g. "${applicationId}.fileprovider").
+ *
+ * 2. Authority uniquification: some libraries (AndroidX Startup initializers, various SDKs) declare
+ *    a <provider android:authorities="..."> value that is NOT derived from the package name at all,
+ *    so pass 1 never touches it — yet it still collides with the original app's already-installed
+ *    provider (INSTALL_FAILED_CONFLICTING_PROVIDER). To catch these too, we resolve the real
+ *    android:authorities attribute (resource id 0x01010026) via the Resource Map chunk, walk every
+ *    element's attributes to find values using that attribute, and append a random per-clone
+ *    suffix to ALL of them — regardless of whether pass 1 already changed them.
  *
  * Binary format reference: frameworks/base ResourceTypes.h/.cpp (ResStringPool_header,
- * ResChunk_header). AndroidManifest.xml compiled by aapt2 has styleCount == 0, so we don't
- * need to preserve style span data — we just carry the (empty) style section through unchanged
- * in length (0) after the rebuild.
+ * ResChunk_header, ResXMLTree_node, ResXMLTree_attrExt, ResXMLTree_attribute, Res_value).
+ * AndroidManifest.xml compiled by aapt2 has styleCount == 0, so we don't preserve style span data.
  */
 object AxmlStringPoolPatcher {
 
     private const val CHUNK_STRING_POOL = 0x0001
+    private const val CHUNK_RESOURCE_MAP = 0x0180
+    private const val CHUNK_START_ELEMENT = 0x0102
     private const val UTF8_FLAG = 1 shl 8
-    private const val SORTED_FLAG = 1 shl 0
+
+    private const val ATTR_AUTHORITIES_RESID = 0x01010026 // android:authorities
+    private const val TYPE_STRING = 0x03 // Res_value.dataType for a string reference
 
     /**
      * @param manifestBytes raw bytes of the compiled AndroidManifest.xml entry from the APK
      * @param oldPackage    original applicationId, e.g. "com.example.app"
      * @param newPackage    desired applicationId, e.g. "com.example.app.clone1"
-     * @return patched manifest bytes, or the original bytes unchanged if no matching string was found
+     * @return patched manifest bytes, or the original bytes unchanged if nothing needed changing
      */
     fun patchPackageName(manifestBytes: ByteArray, oldPackage: String, newPackage: String): ByteArray {
         val buf = ByteBuffer.wrap(manifestBytes).order(ByteOrder.LITTLE_ENDIAN)
@@ -45,7 +58,6 @@ object AxmlStringPoolPatcher {
         val topType = buf.getShort(0).toInt() and 0xFFFF
         require(topType == 0x0003) { "Not a compiled binary XML (unexpected root chunk type $topType)" }
         val topHeaderSize = buf.getShort(2).toInt() and 0xFFFF
-        val topChunkSize = buf.getInt(4)
 
         // The string pool chunk always immediately follows the top-level header.
         val poolStart = topHeaderSize
@@ -73,28 +85,36 @@ object AxmlStringPoolPatcher {
         val offsets = IntArray(stringCount) { buf.getInt(offsetsPos + it * 4) }
 
         val dataBase = poolStart + stringsStart
-        val dataEnd = poolStart + poolChunkSize
         val strings = ArrayList<String>(stringCount)
         for (i in 0 until stringCount) {
             val absOffset = dataBase + offsets[i]
             strings.add(if (isUtf8) readUtf8String(buf, absOffset) else readUtf16String(buf, absOffset))
         }
 
+        // ---- Pass 2 prep: find every string-pool index used as an android:authorities value ----
+        val authorityIndices = findAuthorityStringIndices(buf, manifestBytes.size, poolStart, poolChunkSize, stringCount)
+        val authoritySuffix = ".c" + Random.nextInt(0x1000, 0xFFFF).toString(16)
+
         var changed = false
         val oldDot = "$oldPackage."
         val oldDollar = "$oldPackage$"
         for (i in strings.indices) {
-            val s = strings[i]
-            val newS = when {
+            var s = strings[i]
+            val renamed = when {
                 s == oldPackage -> newPackage
                 s.startsWith(oldDot) -> newPackage + "." + s.substring(oldDot.length)
                 s.startsWith(oldDollar) -> newPackage + "$" + s.substring(oldDollar.length)
                 else -> null
             }
-            if (newS != null) {
-                strings[i] = newS
+            if (renamed != null) {
+                s = renamed
                 changed = true
             }
+            if (i in authorityIndices) {
+                s += authoritySuffix
+                changed = true
+            }
+            strings[i] = s
         }
         if (!changed) return manifestBytes
 
@@ -110,12 +130,11 @@ object AxmlStringPoolPatcher {
         val newStringDataBytes = dataOut.toByteArray()
 
         val newOffsetsTableSize = stringCount * 4
-        val newPoolHeaderSize = poolHeaderSize // header layout itself doesn't change size
-        val newStringsStart = newPoolHeaderSize + newOffsetsTableSize
+        val newStringsStart = poolHeaderSize + newOffsetsTableSize
         val newPoolChunkSize = newStringsStart + newStringDataBytes.size
 
         val newPool = ByteArrayOutputStream()
-        val poolHeader = ByteBuffer.allocate(newPoolHeaderSize).order(ByteOrder.LITTLE_ENDIAN)
+        val poolHeader = ByteBuffer.allocate(poolHeaderSize).order(ByteOrder.LITTLE_ENDIAN)
         poolHeader.putShort(0, CHUNK_STRING_POOL.toShort())
         poolHeader.putShort(2, poolHeaderSize.toShort())
         poolHeader.putInt(4, newPoolChunkSize)
@@ -144,6 +163,74 @@ object AxmlStringPoolPatcher {
         // Patch the top-level chunk size field (offset 4, u32 LE).
         ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN).putInt(4, newTopChunkSize)
 
+        return result
+    }
+
+    /**
+     * Walks the Resource Map + XML node section (both untouched by the rename pass, since that
+     * only rewrites string *bytes*, never indices) to find every string-pool index that is used
+     * as the value of an android:authorities attribute anywhere in the document.
+     */
+    private fun findAuthorityStringIndices(
+        buf: ByteBuffer,
+        totalSize: Int,
+        poolStart: Int,
+        poolChunkSize: Int,
+        stringCount: Int
+    ): Set<Int> {
+        var pos = poolStart + poolChunkSize
+        if (pos >= totalSize) return emptySet()
+
+        // Optional Resource Map chunk: maps string-pool index -> Android resource id, one
+        // int per string, covering the first N (attribute-name) strings in the pool.
+        var authoritiesNameIndex = -1
+        val chunkType = buf.getShort(pos).toInt() and 0xFFFF
+        if (chunkType == CHUNK_RESOURCE_MAP) {
+            val chunkSize = buf.getInt(pos + 4)
+            val idCount = (chunkSize - 8) / 4
+            for (i in 0 until minOf(idCount, stringCount)) {
+                val resId = buf.getInt(pos + 8 + i * 4)
+                if (resId == ATTR_AUTHORITIES_RESID) {
+                    authoritiesNameIndex = i
+                    break
+                }
+            }
+            pos += chunkSize
+        }
+        if (authoritiesNameIndex < 0) return emptySet() // no provider-authorities attribute used at all
+
+        val result = HashSet<Int>()
+        while (pos < totalSize) {
+            val type = buf.getShort(pos).toInt() and 0xFFFF
+            val headerSize = buf.getShort(pos + 2).toInt() and 0xFFFF
+            val size = buf.getInt(pos + 4)
+            if (size <= 0) break // corrupt/unexpected, stop rather than loop forever
+
+            if (type == CHUNK_START_ELEMENT) {
+                // ResXMLTree_node common header is headerSize bytes (line number + comment),
+                // immediately followed by ResXMLTree_attrExt.
+                val attrExtStart = pos + headerSize
+                val attributeStart = buf.getShort(attrExtStart + 8).toInt() and 0xFFFF
+                val attributeSize = buf.getShort(attrExtStart + 10).toInt() and 0xFFFF
+                val attributeCount = buf.getShort(attrExtStart + 12).toInt() and 0xFFFF
+                val firstAttr = attrExtStart + attributeStart
+
+                for (a in 0 until attributeCount) {
+                    val attrOffset = firstAttr + a * attributeSize
+                    val nameIndex = buf.getInt(attrOffset + 4)
+                    if (nameIndex != authoritiesNameIndex) continue
+
+                    val rawValueIndex = buf.getInt(attrOffset + 8)
+                    if (rawValueIndex >= 0) result.add(rawValueIndex)
+
+                    // Res_value starts at attrOffset+12: size(2) res0(1) dataType(1) data(4)
+                    val dataType = buf.get(attrOffset + 12 + 3).toInt() and 0xFF
+                    val data = buf.getInt(attrOffset + 12 + 4)
+                    if (dataType == TYPE_STRING && data >= 0) result.add(data)
+                }
+            }
+            pos += size
+        }
         return result
     }
 
