@@ -37,6 +37,23 @@ AndroidManifest.xml** напряму — знаходить у глобальн�
   `AndroidKeyStore` — оновлення клону іншим ключем пізніше призведе до помилки
   `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
 
+## Джерела APK для клонування
+
+- **Зі списку встановлених застосунків** — головний екран.
+- **Довільний `.apk`-файл з пам'яті пристрою** — кнопка "Обрати APK-файл з пам'яті
+  пристрою" відкриває системний файловий пікер (Storage Access Framework), тому окремий
+  дозвіл на читання сховища не потрібен. Package name оригінального файлу визначається
+  через `PackageManager#getPackageArchiveInfo`.
+
+## CI / Реліз
+
+`.github/workflows/android-build.yml`:
+- на кожен push у `main` та на pull request — збирає `assembleDebug`, викладає як build
+  artifact;
+- додатково на push у `main` — збирає `assembleRelease` (підписаний debug-ключем, щоб не
+  потрібно було заводити секрети в репозиторії) і автоматично публікує його як **GitHub
+  Release** (тег `v0.1.<номер білда>`).
+
 ## Збірка
 
 Локально (потрібен встановлений Gradle 8.7+ і Android SDK):

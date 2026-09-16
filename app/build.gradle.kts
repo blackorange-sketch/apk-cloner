@@ -19,6 +19,10 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Signed with the auto-generated debug keystore so CI can produce an
+            // installable APK with zero secrets/config. Fine for personal sideloading;
+            // swap in a real signingConfig here if you ever need a Play-Store-grade key.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
@@ -46,6 +50,7 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+    implementation("androidx.activity:activity-ktx:1.9.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
     // Pure-Java APK signing library used internally by AGP/apksigner.

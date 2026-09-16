@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">ApkCloner</string>
     <string name="select_app_hint">Оберіть застосунок для клонування</string>
+    <string name="pick_apk_from_storage">Обрати APK-файл з пам\'яті пристрою</string>
 </resources>
