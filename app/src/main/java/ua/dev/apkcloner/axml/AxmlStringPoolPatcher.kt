@@ -49,12 +49,24 @@ object AxmlStringPoolPatcher {
     private const val TYPE_STRING = 0x03 // Res_value.dataType for a string reference
 
     /**
-     * @param manifestBytes raw bytes of the compiled AndroidManifest.xml entry from the APK
+     * @param manifestBytes raw bytes of the compiled AndroidManifest.xml (or resources.arsc) entry
      * @param oldPackage    original applicationId, e.g. "com.example.app"
      * @param newPackage    desired applicationId, e.g. "com.example.app.clone1"
-     * @return patched manifest bytes, or the original bytes unchanged if nothing needed changing
+     * @param renamePrefixedStrings If true, ALSO renames any string that merely starts with
+     *   "<oldPackage>." / "<oldPackage>$" (not just exact matches). Safe for resources.arsc,
+     *   whose string pool holds plain resource VALUES (UI text, authority strings baked from
+     *   ${applicationId} placeholders, etc.) — never .dex class-name references. Must stay false
+     *   for AndroidManifest.xml, where such strings are typically fully-qualified class names
+     *   (android:name of activities/services/providers) that this tool does not relocate in the
+     *   .dex; renaming the reference without the class would crash the clone at launch.
+     * @return patched bytes, or the original bytes unchanged if nothing needed changing
      */
-    fun patchPackageName(manifestBytes: ByteArray, oldPackage: String, newPackage: String): ByteArray {
+    fun patchPackageName(
+        manifestBytes: ByteArray,
+        oldPackage: String,
+        newPackage: String,
+        renamePrefixedStrings: Boolean = false
+    ): ByteArray {
         val buf = ByteBuffer.wrap(manifestBytes).order(ByteOrder.LITTLE_ENDIAN)
 
         // Top-level chunk: for AndroidManifest.xml this is ResXMLTree_header (0x0003); for
@@ -104,19 +116,26 @@ object AxmlStringPoolPatcher {
         val authoritySuffix = ".c" + Random.nextInt(0x1000, 0xFFFF).toString(16)
 
         var changed = false
+        val oldDot = "$oldPackage."
+        val oldDollar = "$oldPackage$"
         for (i in strings.indices) {
             var s = strings[i]
-            // IMPORTANT: only rename the string that is EXACTLY the package name (the
-            // manifest's own package="..." attribute). Do NOT rewrite anything with the
-            // package name as a PREFIX (e.g. "oldPackage.MainActivity") — those are fully
-            // qualified class-name references into the .dex, which this tool never touches.
-            // Renaming the manifest reference without renaming the actual class would make
-            // Android look for a class that no longer exists there -> ClassNotFoundException
-            // crash at launch. Authorities are handled separately below (Pass 2), by resolving
-            // the actual android:authorities attribute rather than guessing from text.
+            // Exact match (the package="..." attribute, or a resources.arsc string value that
+            // is literally just the package name) is always safe to rename.
             if (s == oldPackage) {
                 s = newPackage
                 changed = true
+            } else if (renamePrefixedStrings) {
+                // Only enabled for resources.arsc (see kdoc above) — never for
+                // AndroidManifest.xml, where a prefixed string is almost always a fully
+                // qualified .dex class-name reference that must NOT be rewritten here.
+                if (s.startsWith(oldDot)) {
+                    s = newPackage + "." + s.substring(oldDot.length)
+                    changed = true
+                } else if (s.startsWith(oldDollar)) {
+                    s = newPackage + "$" + s.substring(oldDollar.length)
+                    changed = true
+                }
             }
             if (i in authorityIndices) {
                 s += authoritySuffix

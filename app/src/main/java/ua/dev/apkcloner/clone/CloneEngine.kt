@@ -56,7 +56,9 @@ object CloneEngine {
             val patchedResourcesBytes: ByteArray? = resourcesEntry?.let { entry ->
                 val original = zip.getInputStream(entry).use { it.readBytes() }
                 try {
-                    val patched = AxmlStringPoolPatcher.patchPackageName(original, oldPackage, newPackage)
+                    val patched = AxmlStringPoolPatcher.patchPackageName(
+                        original, oldPackage, newPackage, renamePrefixedStrings = true
+                    )
                     Logger.log(
                         "CloneEngine",
                         "resources.arsc patched: changed=${!patched.contentEquals(original)}"
