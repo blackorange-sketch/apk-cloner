@@ -3,4 +3,5 @@
     <string name="select_app_hint">Оберіть застосунок для клонування</string>
     <string name="pick_apk_from_storage">Обрати APK-файл з пам\'яті пристрою</string>
     <string name="view_log">Переглянути лог</string>
+    <string name="search_hint">Пошук за назвою або package name</string>
 </resources>

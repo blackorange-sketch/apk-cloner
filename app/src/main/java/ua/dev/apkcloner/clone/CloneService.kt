@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -24,6 +25,7 @@ class CloneService : Service() {
         const val EXTRA_OLD_PACKAGE = "old_package"
         const val EXTRA_NEW_PACKAGE = "new_package"
         const val EXTRA_LABEL = "label"
+        const val EXTRA_ICON_PATH = "icon_path"
         const val CHANNEL_ID = "clone_progress"
         const val NOTIFICATION_ID = 42
 
@@ -48,6 +50,7 @@ class CloneService : Service() {
         val oldPackage = intent?.getStringExtra(EXTRA_OLD_PACKAGE)
         val newPackage = intent?.getStringExtra(EXTRA_NEW_PACKAGE)
         val label = intent?.getStringExtra(EXTRA_LABEL) ?: newPackage.orEmpty()
+        val iconPath = intent?.getStringExtra(EXTRA_ICON_PATH)
 
         if (sourcePath == null || oldPackage == null || newPackage == null) {
             stopSelf(startId)
@@ -66,7 +69,12 @@ class CloneService : Service() {
                 val unsignedApk = File(workDir, "unsigned_${System.currentTimeMillis()}.apk")
                 val signedApk = File(workDir, "signed_${System.currentTimeMillis()}.apk")
 
-                CloneEngine.createClone(sourceApk, unsignedApk, oldPackage, newPackage)
+                val iconBitmap = iconPath?.let { BitmapFactory.decodeFile(it) }
+                val badgeLabel = newPackage.substringAfterLast('.').take(3).ifBlank { "C" }
+                CloneEngine.createClone(
+                    sourceApk, unsignedApk, oldPackage, newPackage,
+                    badgeIcon = iconBitmap, badgeLabel = badgeLabel
+                )
                 Logger.log("CloneService", "Manifest patched + repackaged, unsigned size=${unsignedApk.length()}")
 
                 updateNotification("Підписуємо APK…")

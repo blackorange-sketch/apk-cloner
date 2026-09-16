@@ -1,8 +1,11 @@
 package ua.dev.apkcloner.clone
 
+import android.graphics.Bitmap
 import ua.dev.apkcloner.axml.AxmlStringPoolPatcher
 import ua.dev.apkcloner.util.Logger
 import java.io.File
+import java.io.FilterOutputStream
+import java.io.OutputStream
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -23,6 +26,10 @@ import java.util.zip.ZipOutputStream
  *    patcher throws — that's caught here and we simply leave resources.arsc untouched rather
  *    than failing the whole clone.
  *
+ * Also optionally overlays a badge on the launcher icon (see IconBadger) and 4-byte-aligns every
+ * uncompressed (STORED) zip entry the way the official `zipalign` tool does, so resources.arsc
+ * and any STORED assets can still be mmap'd directly by the platform.
+ *
  * Note on dex code: app code that calls Context#getPackageName() will correctly see the NEW
  * package name at runtime (PackageManager derives it from the installed manifest, not from
  * anything baked into the dex). Only code that hardcodes the literal old package name as a
@@ -32,14 +39,25 @@ object CloneEngine {
 
     private const val MANIFEST_ENTRY = "AndroidManifest.xml"
     private const val RESOURCES_ENTRY = "resources.arsc"
+    private const val ZIP_LOCAL_HEADER_FIXED_SIZE = 30
 
     /**
-     * @param sourceApk   original APK pulled from the device (e.g. ApplicationInfo.sourceDir)
-     * @param outputApk   where to write the patched, UNSIGNED apk
-     * @param oldPackage  original applicationId
-     * @param newPackage  desired applicationId for the clone
+     * @param sourceApk    original APK pulled from the device (e.g. ApplicationInfo.sourceDir)
+     * @param outputApk    where to write the patched, UNSIGNED apk
+     * @param oldPackage   original applicationId
+     * @param newPackage   desired applicationId for the clone
+     * @param badgeIcon    if provided, the app's launcher icon bitmap to badge and splice back
+     *                     into any zip entry matching IconBadger.LAUNCHER_ICON_PATTERN
+     * @param badgeLabel   short text drawn inside the badge (e.g. "C1")
      */
-    fun createClone(sourceApk: File, outputApk: File, oldPackage: String, newPackage: String) {
+    fun createClone(
+        sourceApk: File,
+        outputApk: File,
+        oldPackage: String,
+        newPackage: String,
+        badgeIcon: Bitmap? = null,
+        badgeLabel: String = "C"
+    ) {
         ZipFile(sourceApk).use { zip ->
             val manifestEntry = zip.getEntry(MANIFEST_ENTRY)
                 ?: error("AndroidManifest.xml not found in APK")
@@ -72,14 +90,23 @@ object CloneEngine {
                 }
             }
 
-            ZipOutputStream(outputApk.outputStream().buffered()).use { zos ->
+            val badgedIconBytes: ByteArray? = badgeIcon?.let { IconBadger.badge(it, badgeLabel) }
+            var iconEntriesReplaced = 0
+
+            val counting = CountingOutputStream(outputApk.outputStream())
+            ZipOutputStream(counting).use { zos ->
                 val entries = zip.entries().toList().sortedBy { it.name }
                 for (entry in entries) {
                     if (entry.isDirectory) continue
 
-                    val bytes = when (entry.name) {
-                        MANIFEST_ENTRY -> patchedManifestBytes
-                        RESOURCES_ENTRY -> patchedResourcesBytes ?: zip.getInputStream(entry).use { it.readBytes() }
+                    val bytes = when {
+                        entry.name == MANIFEST_ENTRY -> patchedManifestBytes
+                        entry.name == RESOURCES_ENTRY ->
+                            patchedResourcesBytes ?: zip.getInputStream(entry).use { it.readBytes() }
+                        badgedIconBytes != null && IconBadger.LAUNCHER_ICON_PATTERN.containsMatchIn(entry.name) -> {
+                            iconEntriesReplaced++
+                            badgedIconBytes
+                        }
                         else -> zip.getInputStream(entry).use { it.readBytes() }
                     }
 
@@ -93,6 +120,15 @@ object CloneEngine {
                         newEntry.size = bytes.size.toLong()
                         newEntry.compressedSize = bytes.size.toLong()
                         newEntry.crc = crc.value
+                        // zipalign: pad the extra field so the DATA (right after the local
+                        // header) lands on a 4-byte boundary — lets the platform mmap this
+                        // entry directly instead of copying it. Only matters for STORED entries;
+                        // DEFLATED ones are decompressed into memory anyway.
+                        val nameBytes = entry.name.toByteArray(Charsets.UTF_8)
+                        val headerStart = counting.count
+                        val unpaddedDataStart = headerStart + ZIP_LOCAL_HEADER_FIXED_SIZE + nameBytes.size
+                        val padding = (4 - (unpaddedDataStart % 4).toInt()) % 4
+                        if (padding > 0) newEntry.extra = ByteArray(padding)
                     } else {
                         newEntry.method = ZipEntry.DEFLATED
                     }
@@ -101,6 +137,23 @@ object CloneEngine {
                     zos.closeEntry()
                 }
             }
+            Logger.log("CloneEngine", "icon badge entries replaced=$iconEntriesReplaced")
+        }
+    }
+
+    /** Tiny wrapper just to know the current absolute write offset for zipalign padding. */
+    private class CountingOutputStream(out: OutputStream) : FilterOutputStream(out) {
+        var count: Long = 0
+            private set
+
+        override fun write(b: Int) {
+            out.write(b)
+            count++
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            out.write(b, off, len)
+            count += len
         }
     }
 }
