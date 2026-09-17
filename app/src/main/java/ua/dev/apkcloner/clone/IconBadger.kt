@@ -12,10 +12,11 @@ import java.io.ByteArrayOutputStream
  * visually distinguishable from the original on the launcher/app-drawer.
  *
  * Limitation: this only replaces zip entries whose file name matches the conventional
- * "res/mipmap*/ic_launcher*.png" / "res/drawable*/ic_launcher*.png" pattern used by Android
- * Studio's default project templates. Apps that rename their launcher icon resource, or whose
- * build obfuscates/hashes resource file paths (resource shrinking with path shortening), won't
- * get a badge — the clone still installs and works fine, it just keeps the original icon.
+ * launcher icon naming used by Android Studio's default project templates (files named
+ * "ic_launcher", optionally with a suffix, under a res/mipmap or res/drawable folder). Apps that
+ * rename their launcher icon resource, or whose build obfuscates or hashes resource file paths
+ * (resource shrinking with path shortening), won't get a badge — the clone still installs and
+ * works fine, it just keeps the original icon.
  */
 object IconBadger {
 

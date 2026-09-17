@@ -197,24 +197,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Renders a Drawable to a PNG file in cache so it can be passed to CloneService by path. */
-    private fun stageIconForBadge(icon: Drawable): String? = try {
-        val bitmap = if (icon is BitmapDrawable && icon.bitmap != null) {
-            icon.bitmap
-        } else {
-            val w = icon.intrinsicWidth.coerceAtLeast(1)
-            val h = icon.intrinsicHeight.coerceAtLeast(1)
-            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bmp ->
-                val canvas = Canvas(bmp)
-                icon.setBounds(0, 0, canvas.width, canvas.height)
-                icon.draw(canvas)
+    private fun stageIconForBadge(icon: Drawable?): String? {
+        if (icon == null) return null
+        return try {
+            val bitmap = if (icon is BitmapDrawable && icon.bitmap != null) {
+                icon.bitmap
+            } else {
+                val w = icon.intrinsicWidth.coerceAtLeast(1)
+                val h = icon.intrinsicHeight.coerceAtLeast(1)
+                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bmp ->
+                    val canvas = Canvas(bmp)
+                    icon.setBounds(0, 0, canvas.width, canvas.height)
+                    icon.draw(canvas)
+                }
             }
+            val file = File(cacheDir, "icon_${System.currentTimeMillis()}.png")
+            file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            file.absolutePath
+        } catch (t: Throwable) {
+            Logger.log("MainActivity", "Icon staging failed: ${t.message}")
+            null
         }
-        val file = File(cacheDir, "icon_${System.currentTimeMillis()}.png")
-        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        file.absolutePath
-    } catch (t: Throwable) {
-        Logger.log("MainActivity", "Icon staging failed: ${t.message}")
-        null
     }
 
     private fun askNewPackageAndClone(
